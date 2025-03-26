@@ -61,6 +61,10 @@ namespace glw {
             glGenBuffers(1, &m_ID);
             Source(data);
         }
+        Buffer(const void* data, u32 byte_size) {
+            glGenBuffers(1, &m_ID);
+            Source(data, byte_size);
+        }
         ~Buffer() {
             glDeleteBuffers(1, &m_ID);
         }
@@ -72,16 +76,49 @@ namespace glw {
             m_length = data.size();
             glBufferData(BufferType, data.size_bytes(), data.data(), Usage);
         }
+        void SubSource(u32 offset, std::span<const ElemType> data) { // TODO: test
+            Bind();
+            glBufferSubData(BufferType, offset, data.size_bytes(), data.data());
+        }
+        void Source(const void* data, u32 byte_size) {
+            Bind();
+            m_length = 1;
+            glBufferData(BufferType, byte_size, data, Usage);
+        }
+        void SubSource(u32 offset, const void* data, u32 byte_size) { // TODO: test
+            Bind();
+            glBufferSubData(BufferType, offset, byte_size, data);
+        }
         u32 GetLength() const { return m_length; }
+    private:
+        u32 m_length = 0;
+    };
+
+    template<typename TElem, GLenum Usage = GL_STATIC_DRAW>
+    using VertexBuffer = Buffer<GL_ARRAY_BUFFER, TElem, Usage>;
+
+    template<typename TElem, GLenum Usage = GL_STATIC_DRAW>
+    using IndexBuffer = Buffer<GL_ELEMENT_ARRAY_BUFFER, TElem, Usage>;
+
+    template<GLenum Usage = GL_STATIC_DRAW>
+    class ShaderStorageBuffer : public Buffer<GL_SHADER_STORAGE_BUFFER, u8, Usage> {
+    public:
+        ShaderStorageBuffer(std::span<const u8> data, u32 bind_index = 0)
+            : Buffer<GL_SHADER_STORAGE_BUFFER, u8, Usage>(data)
+        {
+            BindToIndex(bind_index);
+        }
+        ShaderStorageBuffer(const void* data, u32 byte_size, u32 bind_index = 0)
+            : Buffer<GL_SHADER_STORAGE_BUFFER, u8, Usage>(data, byte_size)
+        {
+            BindToIndex(bind_index);
+        }
+        void BindToIndex(u32 idx) {
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, idx, GLObject::m_ID);
+        }
     private:
         u32 m_length;
     };
-
-    template<typename TElem, GLenum TUsage = GL_STATIC_DRAW>
-    using VertexBuffer = Buffer<GL_ARRAY_BUFFER, TElem, TUsage>;
-
-    template<typename TElem, GLenum TUsage = GL_STATIC_DRAW>
-    using IndexBuffer = Buffer<GL_ELEMENT_ARRAY_BUFFER, TElem, TUsage>;
 
     template<
         typename VertexElemType, GLenum VertexUsage,
@@ -415,7 +452,6 @@ namespace glw {
 
         m_pitch = glm::clamp(m_pitch, -89.0f, 89.0f);
 
-        std::cout << m_yaw << " " << m_pitch << "\n";
         m_front.x = glm::cos(glm::radians(m_yaw)) * glm::cos(glm::radians(m_pitch));
         m_front.y = glm::sin(glm::radians(m_pitch));
         m_front.z = glm::sin(glm::radians(m_yaw)) * glm::cos(glm::radians(m_pitch));

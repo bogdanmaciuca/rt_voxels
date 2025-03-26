@@ -1,7 +1,13 @@
-#include "glw.hpp"
 #include <vector>
+#include <array>
 #include <fstream>
 #include <cassert>
+#include <span>
+#include <cstring>
+#define OGT_VOX_IMPLEMENTATION
+#include "../vendor/ogt_vox.h"
+#define GLW_IMPLEMENTATION
+#include "glw.hpp"
 
 std::string ReadFile(const std::string& filename) {
     std::ifstream file(filename);
@@ -19,8 +25,39 @@ enum {
     WND_HEIGHT = 768
 };
 
+struct SceneMetadata {
+    glw::i32 size_x, size_y, size_z;
+    std::array<glm::vec4, 256> palette;
+};
+
 int main() {
+    const std::string vox_data = ReadFile("res/spellbook.vox");
+
+    const ogt_vox_scene* scene_data = ogt_vox_read_scene((uint8_t*)vox_data.data(), vox_data.size());
+    assert(scene_data->num_models != 0);
+ 
+    SceneMetadata scene_metadata;
+    scene_metadata.size_x = scene_data->models[0]->size_x;
+    scene_metadata.size_y = scene_data->models[0]->size_y;
+    scene_metadata.size_z = scene_data->models[0]->size_z;
+    for (glw::u32 i = 0; i < scene_metadata.palette.size(); i++) {
+        scene_metadata.palette[i] = glm::vec4(
+            scene_data->palette.color[i].r / 255.0f,
+            scene_data->palette.color[i].g / 255.0f,
+            scene_data->palette.color[i].b / 255.0f,
+            scene_data->palette.color[i].a / 255.0f
+        );
+    }
+
+    std::vector<glw::u8> ssbo_data;
+    const glw::u32 voxel_data_size = sizeof(glw::u8) * scene_metadata.size_x * scene_metadata.size_y * scene_metadata.size_z;
+    ssbo_data.resize(sizeof(SceneMetadata) + scene_metadata.size_x * scene_metadata.size_y * scene_metadata.size_z);
+    std::memcpy(ssbo_data.data(), &scene_metadata, sizeof(SceneMetadata));
+    std::memcpy(ssbo_data.data() + sizeof(SceneMetadata), scene_data->models[0]->voxel_data, voxel_data_size);
+
     glw::Context context("Voxel raytracer", WND_WIDTH, WND_HEIGHT);
+
+    glw::ShaderStorageBuffer<GL_DYNAMIC_DRAW> ssbo(ssbo_data);
 
     std::vector<glm::vec2> vertices = {
         { 1.0f,  1.0f },
@@ -44,14 +81,8 @@ int main() {
     shader.Bind();
     shader.SetFloat("uRatio", (float)WND_WIDTH/(float)WND_HEIGHT);
 
-    std::vector<glm::vec3> spheres = {
-        { -1, 0, -2 },
-        {  1, 0, -2 },
-        {  0, 2, -2 }
-    };
-    shader.SetVec3Vec("uSpheres", spheres);
-
     glw::FPSCamera camera(80.0f, (float)WND_WIDTH / (float)WND_HEIGHT);
+    camera.SetPos(glm::vec3(60, 60, 60));
 
     bool should_quit = false;
     SDL_Event evt;
@@ -84,5 +115,7 @@ int main() {
         vertex_array_object.Draw();
         context.Present();
     }
+
+    ogt_vox_destroy_scene(scene_data);
 }
 
