@@ -1,11 +1,11 @@
 #ifndef GLW_HPP
 #define GLW_HPP
 
-#include <vector>
 #include <string>
 #include <cstdint>
 #include <initializer_list>
 #include <span>
+#include <type_traits>
 #include <SDL2/SDL.h>
 #include <GL/glew.h>
 #include <glm/glm.hpp>
@@ -51,94 +51,116 @@ namespace glw {
         u32 m_ID;
     };
 
-    template<GLenum BufferType, typename ElemType, GLenum Usage>
-    struct Buffer : public GLObject {
+    template<typename ElemType>
+    struct GenericBuffer : public GLObject {
     public:
-        Buffer() {
+        GenericBuffer(GLenum buffer_type, GLenum usage)
+            : m_buffer_type(buffer_type), m_usage(usage)
+        {
             glGenBuffers(1, &m_ID);
         }
-        Buffer(std::span<const ElemType> data) {
+        GenericBuffer(const std::span<const ElemType>& data, GLenum buffer_type, GLenum usage)
+            : m_buffer_type(buffer_type), m_usage(usage)
+        {
             glGenBuffers(1, &m_ID);
             Source(data);
         }
-        Buffer(const void* data, u32 byte_size) {
+        GenericBuffer(const void* data, u32 byte_size, GLenum buffer_type, GLenum usage)
+            : m_buffer_type(buffer_type), m_usage(usage)
+        {
             glGenBuffers(1, &m_ID);
             Source(data, byte_size);
         }
-        ~Buffer() {
+        ~GenericBuffer() {
             glDeleteBuffers(1, &m_ID);
         }
         void Bind() const {
-            glBindBuffer(BufferType, m_ID);
+            glBindBuffer(m_buffer_type, m_ID);
         }
         void Source(std::span<const ElemType> data) {
             Bind();
             m_length = data.size();
-            glBufferData(BufferType, data.size_bytes(), data.data(), Usage);
+            glBufferData(m_buffer_type, data.size_bytes(), data.data(), m_usage);
         }
-        void SubSource(u32 offset, std::span<const ElemType> data) { // TODO: test
+        void SubSource(u32 offset, std::span<const ElemType> data) { // TODO: not tested yet
             Bind();
-            glBufferSubData(BufferType, offset, data.size_bytes(), data.data());
+            glBufferSubData(m_buffer_type, offset, data.size_bytes(), data.data());
         }
         void Source(const void* data, u32 byte_size) {
             Bind();
             m_length = 1;
-            glBufferData(BufferType, byte_size, data, Usage);
+            glBufferData(m_buffer_type, byte_size, data, m_usage);
         }
-        void SubSource(u32 offset, const void* data, u32 byte_size) { // TODO: test
+        void SubSource(u32 offset, const void* data, u32 byte_size) { // TODO: not tested yet
             Bind();
-            glBufferSubData(BufferType, offset, byte_size, data);
+            glBufferSubData(m_buffer_type, offset, byte_size, data);
         }
+        GLenum GetBufferType() { return m_buffer_type; }
+        GLenum GetUsage() { return m_usage; }
         u32 GetLength() const { return m_length; }
     private:
+        GLenum m_buffer_type;
+        GLenum m_usage;
         u32 m_length = 0;
     };
 
-    template<typename TElem, GLenum Usage = GL_STATIC_DRAW>
-    using VertexBuffer = Buffer<GL_ARRAY_BUFFER, TElem, Usage>;
-
-    template<typename TElem, GLenum Usage = GL_STATIC_DRAW>
-    using IndexBuffer = Buffer<GL_ELEMENT_ARRAY_BUFFER, TElem, Usage>;
-
-    template<GLenum Usage = GL_STATIC_DRAW>
-    class ShaderStorageBuffer : public Buffer<GL_SHADER_STORAGE_BUFFER, u8, Usage> {
+    template<typename T>
+    class VertexBuffer : public GenericBuffer<T> {
     public:
-        ShaderStorageBuffer(std::span<const u8> data, u32 bind_index = 0)
-            : Buffer<GL_SHADER_STORAGE_BUFFER, u8, Usage>(data)
+        VertexBuffer(GLenum usage = GL_STATIC_DRAW)
+            : GenericBuffer<T>(GL_ARRAY_BUFFER, usage) {}
+        VertexBuffer(const std::span<const T>& data, GLenum usage = GL_STATIC_DRAW)
+            : GenericBuffer<T>(data, GL_ARRAY_BUFFER, usage) {}
+    };
+
+    template<typename T>
+    class IndexBuffer : public GenericBuffer<T> {
+    public:
+        IndexBuffer(GLenum usage = GL_STATIC_DRAW)
+            : GenericBuffer<T>(GL_ELEMENT_ARRAY_BUFFER, usage) {}
+        IndexBuffer(const std::span<const T>& data, GLenum usage = GL_STATIC_DRAW)
+            : GenericBuffer<T>(data, GL_ELEMENT_ARRAY_BUFFER, usage) {}
+    };
+
+    class ShaderStorageBuffer : public GenericBuffer<u8> {
+    public:
+        ShaderStorageBuffer(u32 bind_index = 0, GLenum usage = GL_STATIC_DRAW)
+            : GenericBuffer<u8>(GL_SHADER_STORAGE_BUFFER, usage)
         {
             BindToIndex(bind_index);
         }
-        ShaderStorageBuffer(const void* data, u32 byte_size, u32 bind_index = 0)
-            : Buffer<GL_SHADER_STORAGE_BUFFER, u8, Usage>(data, byte_size)
+        ShaderStorageBuffer(const void* data, u32 byte_size, u32 bind_index = 0, GLenum usage = GL_STATIC_DRAW)
+            : GenericBuffer<u8>(data, byte_size, GL_SHADER_STORAGE_BUFFER, usage)
         {
             BindToIndex(bind_index);
         }
         void BindToIndex(u32 idx) {
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, idx, GLObject::m_ID);
         }
-    private:
-        u32 m_length;
     };
 
-    template<
-        typename VertexElemType, GLenum VertexUsage,
-        typename IndexElemType, GLenum IndexUsage>
+    struct VertexAttribute {
+        GLenum type;
+        u32 num;
+    };
+    template<typename VertexT, typename IndexT = void>
     class VertexArrayObject : public GLObject {
     public:
-        struct Attribute {
-            GLenum type;
-            u32 num;
-        };
+        VertexArrayObject() {
+            glGenVertexArrays(1, &m_ID);
+        }
         VertexArrayObject(
-            const VertexBuffer<VertexElemType, VertexUsage> *vertex_buffer,
-            const IndexBuffer<IndexElemType, IndexUsage> *index_buffer,
-            const std::initializer_list<Attribute>& attributes)
-            : m_vertex_buffer(vertex_buffer), m_index_buffer(index_buffer)
+            const VertexBuffer<VertexT>* vertex_buffer,
+            const std::initializer_list<VertexAttribute>& attributes,
+            const IndexBuffer<IndexT>* index_buffer = nullptr)
         {
+            m_vertex_buffer = vertex_buffer;
+            if constexpr (!std::is_same<IndexT, void>::value)
+                m_index_buffer = index_buffer;
             glGenVertexArrays(1, &m_ID);
             glBindVertexArray(m_ID);
             m_vertex_buffer->Bind();
-            if (m_index_buffer != nullptr)
+            if constexpr (!std::is_same<IndexT, void>::value)
                 m_index_buffer->Bind();
             InitializeAttributes(attributes);
             glBindVertexArray(0);
@@ -148,21 +170,24 @@ namespace glw {
         }
         void Draw(GLenum mode = GL_TRIANGLES, GLenum indices_elem_type = GL_UNSIGNED_INT) {
             glBindVertexArray(m_ID);
-            if (m_index_buffer != nullptr)
+            if constexpr (!std::is_same<IndexT, void>::value)
                 glDrawElements(mode, m_index_buffer->GetLength(), indices_elem_type, nullptr);
             else
                 glDrawArrays(mode, 0, m_vertex_buffer->GetLength());
         }
     private:
-        const VertexBuffer<VertexElemType, VertexUsage>* m_vertex_buffer;
-        const IndexBuffer<IndexElemType, IndexUsage>* m_index_buffer;
+        const VertexBuffer<VertexT>* m_vertex_buffer;
+        const IndexBuffer<IndexT>* m_index_buffer;
 
-        void InitializeAttributes(const std::initializer_list<Attribute>& attributes) {
+        void InitializeAttributes(const std::initializer_list<VertexAttribute>& attributes) {
             u32 idx = 0;
             u32 offset = 0;
-            for (const Attribute& attrib : attributes) {
+            for (const VertexAttribute& attrib : attributes) {
                 glEnableVertexAttribArray(idx);
-                glVertexAttribPointer(idx, attrib.num, attrib.type, GL_FALSE, sizeof(VertexElemType), reinterpret_cast<void*>(offset));
+                glVertexAttribPointer(
+                    idx, attrib.num, attrib.type, GL_FALSE,
+                    sizeof(VertexT), reinterpret_cast<void*>(offset)
+                );
                 u8 size = 0;
                 switch(attrib.type) {
                     case GL_BYTE: case GL_UNSIGNED_BYTE: size = 1; break;
@@ -174,15 +199,16 @@ namespace glw {
             }
         }
     };
-
     class Shader : public GLObject {
     public:
+        Shader() {}
         Shader(const std::string& vert_source, const std::string& frag_source);
         ~Shader();
         void Bind();
+        void Compile(const std::string& vert_source, const std::string& frag_source);
         void Recompile(const std::string& vert_source, const std::string& frag_source);
         void SetInt(const std::string& name, i32 value);
-        void SetIntVec(const std::string& name, const std::span<i32> value);
+        void SetIntVec(const std::string& name, const std::span<const i32>& value);
         void SetFloat(const std::string& name, float value);
         void SetFloatVec(const std::string& name, const std::span<float> value);
         void SetVec3(const std::string& name, const glm::vec3& value);
@@ -193,7 +219,6 @@ namespace glw {
     private:
         void CheckErrors(u32 shader, GLenum type);
         u32 CreateShader(GLenum type, const std::string& filename);
-        void Compile(const std::string& vert_source, const std::string& frag_source);
     };
 
     enum CameraMoveDir { CameraForward, CameraBackward, CameraLeft, CameraRight };
@@ -207,10 +232,9 @@ namespace glw {
         static constexpr glm::vec3 DefaultUpVec = { 0, 1, 0 };
 
         FPSCamera(float FOV, float w_h_ratio);
-        glm::vec3 GetFrontVec();
-        glm::mat4 GetViewMatrix();
-        glm::mat4 GetProjection();
-        void ProcessMouse(const Context& ctx);
+        glm::mat4 GetViewMatrix() const;
+        glm::mat4 GetProjection() const;
+        void ProcessMouse();
         void Move(CameraMoveDir dir, float delta_time);
         glm::vec3 GetPos() const;
         void SetPos(const glm::vec3& pos);
@@ -362,7 +386,7 @@ namespace glw {
     void Shader::SetInt(const std::string& name, i32 value) {
         glUniform1i(glGetUniformLocation(m_ID, name.c_str()), value);
     }
-    void Shader::SetIntVec(const std::string& name, const std::span<i32> value) {
+    void Shader::SetIntVec(const std::string& name, const std::span<const i32>& value) {
         glUniform1iv(glGetUniformLocation(m_ID, name.c_str()), value.size(), value.data());
     }
     void Shader::SetFloat(const std::string& name, float value) {
@@ -435,13 +459,13 @@ namespace glw {
     FPSCamera::FPSCamera(float FOV, float w_h_ratio) {
         m_projection = glm::perspective(glm::radians(FOV), w_h_ratio, m_z_near, m_z_far);
     }
-    glm::mat4 FPSCamera::GetViewMatrix() {
+    glm::mat4 FPSCamera::GetViewMatrix() const {
         return glm::lookAt(m_pos, m_pos + m_front, m_up);
     }
-    glm::mat4 FPSCamera::GetProjection() {
+    glm::mat4 FPSCamera::GetProjection() const {
         return m_projection;
     }
-    void FPSCamera::ProcessMouse(const Context& ctx) {
+    void FPSCamera::ProcessMouse() {
         i32 mouse_x, mouse_y;
         SDL_GetMouseState(&mouse_x, &mouse_y);
         i32 delta_x = mouse_x - m_last_mouse_x;
